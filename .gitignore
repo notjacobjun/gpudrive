@@ -19,6 +19,7 @@
 .python-version
 /google-cloud-sdk/*
 *.gz
+/env
 
 # Data
 hpc/overlay*
