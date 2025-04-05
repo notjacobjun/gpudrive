@@ -7,6 +7,8 @@ from gpudrive.utils.geometry import (
 )
 import madrona_gpudrive
 
+AGENT_SCALE = madrona_gpudrive.vehicleScale
+
 
 class LocalEgoState:
     """A class to represent the ego state of the agent in relative coordinates.
@@ -29,8 +31,8 @@ class LocalEgoState:
         if mask is not None:
             self_obs_tensor = self_obs_tensor[mask]
             self.speed = self_obs_tensor[:, 0]
-            self.vehicle_length = self_obs_tensor[:, 1]
-            self.vehicle_width = self_obs_tensor[:, 2]
+            self.vehicle_length = self_obs_tensor[:, 1] * AGENT_SCALE
+            self.vehicle_width = self_obs_tensor[:, 2] * AGENT_SCALE
             self.vehicle_height = self_obs_tensor[:, 3]
             self.rel_goal_x = self_obs_tensor[:, 4]
             self.rel_goal_y = self_obs_tensor[:, 5]
@@ -38,8 +40,8 @@ class LocalEgoState:
             self.id = self_obs_tensor[:, 7]
         else:
             self.speed = self_obs_tensor[:, :, 0]
-            self.vehicle_length = self_obs_tensor[:, :, 1]
-            self.vehicle_width = self_obs_tensor[:, :, 2]
+            self.vehicle_length = self_obs_tensor[:, :, 1] * AGENT_SCALE
+            self.vehicle_width = self_obs_tensor[:, :, 2] * AGENT_SCALE
             self.vehicle_height = self_obs_tensor[:, :, 3]
             self.rel_goal_x = self_obs_tensor[:, :, 4]
             self.rel_goal_y = self_obs_tensor[:, :, 5]
@@ -117,8 +119,8 @@ class GlobalEgoState:
         self.rotation_angle = abs_self_obs_tensor[:, :, 7]
         self.goal_x = abs_self_obs_tensor[:, :, 8]
         self.goal_y = abs_self_obs_tensor[:, :, 9]
-        self.vehicle_length = abs_self_obs_tensor[:, :, 10]
-        self.vehicle_width = abs_self_obs_tensor[:, :, 11]
+        self.vehicle_length = abs_self_obs_tensor[:, :, 10] * AGENT_SCALE
+        self.vehicle_width = abs_self_obs_tensor[:, :, 11] * AGENT_SCALE
         self.vehicle_height = abs_self_obs_tensor[:, :, 12]
         self.id = abs_self_obs_tensor[:, :, 13]
 
@@ -141,9 +143,16 @@ class GlobalEgoState:
         return self.pos_x.shape
 
     def restore_mean(self, mean_x, mean_y):
-        """Reapplies the mean to revert back to the original coordinates."""
-        self.pos_x += mean_x
-        self.pos_y += mean_y
+        """Reapplies the mean to revert back to the original coordinates.
+        - self.pos_x and self.pos_y are modified in place are of shape (num_worlds, num_agents).
+        - mean_x and mean_y are expected to be of shape (num_worlds, 1).
+        """
+        # Reshape the mean to broadcast
+        mean_x_reshaped = mean_x.view(-1, 1)
+        mean_y_reshaped = mean_y.view(-1, 1)
+
+        self.pos_x += mean_x_reshaped
+        self.pos_y += mean_y_reshaped
 
 
 @dataclass
@@ -170,13 +179,19 @@ class PartnerObs:
         self.mask = mask
         if self.mask is not None:  # Used for training
             self.data = partner_obs_tensor[self.mask][:, :, :6]
+            self.data[:, :, 4] *= AGENT_SCALE
+            self.data[:, :, 5] *= AGENT_SCALE
         else:
             self.speed = partner_obs_tensor[:, :, :, 0].unsqueeze(-1)
             self.rel_pos_x = partner_obs_tensor[:, :, :, 1].unsqueeze(-1)
             self.rel_pos_y = partner_obs_tensor[:, :, :, 2].unsqueeze(-1)
             self.orientation = partner_obs_tensor[:, :, :, 3].unsqueeze(-1)
-            self.vehicle_length = partner_obs_tensor[:, :, :, 4].unsqueeze(-1)
-            self.vehicle_width = partner_obs_tensor[:, :, :, 5].unsqueeze(-1)
+            self.vehicle_length = (
+                partner_obs_tensor[:, :, :, 4].unsqueeze(-1) * AGENT_SCALE
+            )
+            self.vehicle_width = (
+                partner_obs_tensor[:, :, :, 5].unsqueeze(-1) * AGENT_SCALE
+            )
             self.vehicle_height = partner_obs_tensor[:, :, :, 6].unsqueeze(-1)
             self.agent_type = (
                 partner_obs_tensor[:, :, :, 7].unsqueeze(-1).long()
@@ -301,3 +316,41 @@ class LidarObs:
     def shape(self) -> tuple[int, ...]:
         """Shape: (num_worlds, num_agents, 3, num_lidar_points, 4)."""
         return self.all_lidar_samples.shape
+
+
+@dataclass
+class BevObs:
+    """Dataclass representing the scenario view through LiDAR sensors.
+        - Shape: (num_worlds, num_agents, 200, 200, num_classes).
+    Initialized from bev_observation_tensor (src/bindings).
+    For details, see `BevObservation` and `BevObservations` in src/types.hpp.
+    """
+
+    def __init__(self, bev_observation_tensor: torch.Tensor):
+        self.bev_segmentation_map = bev_observation_tensor
+
+    @classmethod
+    def from_tensor(
+        cls,
+        bev_tensor: madrona_gpudrive.madrona.Tensor,
+        backend="torch",
+        device="cuda",
+    ):
+        if backend == "torch":
+            return cls(bev_tensor.to_torch().clone().to(device))
+        elif backend == "jax":
+            raise NotImplementedError("JAX backend not implemented yet.")
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Shape: (num_worlds, num_agents, resolution, resolution, 1)."""
+        return self.bev_segmentation_map.shape
+
+    def one_hot_encode_bev_map(self):
+        """One-hot encodes the agent types. This operation increases the
+        number of features by 10.
+        """
+        self.bev_segmentation_map = torch.nn.functional.one_hot(
+            self.bev_segmentation_map.long(),
+            num_classes=constants.NUM_MADRONA_ENTITY_TYPES,  # From size of Madrona EntityType
+        )
