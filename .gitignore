@@ -21,6 +21,7 @@
 /google-cloud-sdk/*
 *.gz
 /env
+/examples
 
 # Data
 hpc/overlay*
