@@ -6,7 +6,7 @@ setup(
     packages=find_packages(include=["pygpudrive"]),
     package_data={
         "gpudrive": ["cpython-31*-*.so"],
-        "pygpudrive"
+        "pygpudrive": []
     },
     include_package_data=True,
 )

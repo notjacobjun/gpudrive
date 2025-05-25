@@ -22,6 +22,11 @@
 *.gz
 /env
 /examples
+/external
+/data
+cuda-keyring_1.0-1_all.deb
+/testenv
+gpudrive_cache
 
 # Data
 hpc/overlay*
